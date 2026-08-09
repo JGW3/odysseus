@@ -166,6 +166,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 # legitimately stay open. Without this, a single hung subprocess.run or
 # missing-timeout httpx call locks up the entire server for everyone.
 import asyncio as _asyncio
+import re as _re
 from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
 from starlette.responses import JSONResponse as _JSONResponse
 
@@ -182,12 +183,18 @@ _TIMEOUT_EXEMPT_PREFIXES = (
     "/api/image",           # diffusion proxies (inpaint/harmonize/upscale/etc.) — own 120s httpx timeout
     "/api/memory/audit",    # retains own 120s LLM inactivity timeout
 )
+# Same idea, for paths with an ID segment in the middle that a prefix can't
+# express. These vision calls carry their own 60s httpx timeout.
+_TIMEOUT_EXEMPT_PATTERNS = (
+    _re.compile(r"^/api/gallery/[^/]+/ai-tag$"),
+)
 
 
 class _RequestTimeoutMiddleware(_BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.url.path or ""
-        if any(path.startswith(p) for p in _TIMEOUT_EXEMPT_PREFIXES):
+        if any(path.startswith(p) for p in _TIMEOUT_EXEMPT_PREFIXES) \
+           or any(r.match(path) for r in _TIMEOUT_EXEMPT_PATTERNS):
             return await call_next(request)
         try:
             return await _asyncio.wait_for(call_next(request), timeout=REQUEST_HARD_TIMEOUT)
