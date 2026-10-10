@@ -167,7 +167,7 @@ _HARNESS_PREAMBLE = """
 """
 
 
-def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_resolution, then_js: str = "") -> str:
+def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_resolution, then_js: str = "", db_ids: bool = False) -> str:
     # Globals are stubbed above as plain synchronous statements *before* the
     # dynamic import()s below run — unlike a static `import` declaration,
     # dynamic import() executes in program order, so chat.js's transitive
@@ -193,6 +193,9 @@ def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_
       uiMod.showToast = () => {{}};
 
       const msgs = buildMsgEls({json.dumps(roles)});
+      // Persisted messages carry their database id; the page may have loaded
+      // only the newest of them, so ids (not positions) identify a message.
+      if ({json.dumps(db_ids)}) msgs.forEach((m, i) => {{ m.dataset.dbId = `db-${{i + 40}}`; }});
       const box = {{ querySelectorAll: () => msgs, _isBox: true }};
       globalThis.document._box = box;
       const target = msgs[{target_index}];
@@ -210,6 +213,8 @@ def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_
         forkCalled: Boolean(forkCall),
         forkUrl: forkCall ? forkCall.url : null,
         forkKeepCount: forkCall ? forkCall.body.keep_count : null,
+        forkBody: forkCall ? forkCall.body : null,
+        truncateBody: (fetchCalls.find(c => c.url.includes('/truncate')) || {{}}).body || null,
         selectedSessions,
         sendClicks,
       }}));
@@ -402,3 +407,54 @@ def test_edit_fork_choice_forks_before_user_turn_and_sends_edit():
     roles = ["user", "ai", "user", "ai", "user", "ai"]
     script = _scenario_script("chat.editUserMessage(target)", roles, 2, "alternate", _EDIT_AND_SEND)
     _assert_forked_instead(_run_node(script), keep_count=2, sent_text="edited question")
+
+
+# ---------------------------------------------------------------------------
+# Cutting by message id
+# ---------------------------------------------------------------------------
+# A long chat loads only its newest messages until the user scrolls up, so a
+# position counted in the page is smaller than the real one. Truncating by
+# that position deleted real messages above the clicked one. Every action
+# sends the clicked message's database id when it has one.
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_regenerate_truncates_before_the_user_message_by_id():
+    roles = ["user", "ai", "user", "ai"]
+    script = _scenario_script("chat.regenerateFrom(target)", roles, 3, True, db_ids=True)
+    result = _run_node(script)
+    assert result["truncateBody"] == {"before_msg_id": "db-42"}
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_resend_truncates_before_the_user_message_by_id():
+    roles = ["user", "ai", "user", "ai"]
+    script = _scenario_script("chat.resendUserMessage(target)", roles, 2, True, db_ids=True)
+    result = _run_node(script)
+    assert result["truncateBody"] == {"before_msg_id": "db-42"}
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_edit_truncates_before_the_user_message_by_id():
+    roles = ["user", "ai", "user", "ai"]
+    script = _scenario_script("chat.editUserMessage(target)", roles, 2, True, _EDIT_AND_SEND, db_ids=True)
+    result = _run_node(script)
+    assert result["truncateBody"] == {"before_msg_id": "db-42"}
+    assert result["sendClicks"] == ["edited question"]
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_fork_choice_forks_before_the_user_message_by_id():
+    roles = ["user", "ai", "user", "ai", "user", "ai"]
+    script = _scenario_script("chat.regenerateFrom(target)", roles, 3, "alternate", db_ids=True)
+    result = _run_node(script)
+    assert result["truncateCalled"] is False
+    assert result["forkBody"]["before_msg_id"] == "db-42"
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_fork_conversation_forks_through_the_reply_by_id():
+    roles = ["user", "ai", "user", "ai"]
+    script = _scenario_script("chat.forkFrom(target)", roles, 1, True, db_ids=True)
+    result = _run_node(script)
+    assert result["forkBody"]["through_msg_id"] == "db-41"
+

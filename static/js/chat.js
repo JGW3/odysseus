@@ -6949,7 +6949,7 @@ import { invalidateSettings } from './appConfig.js';
         // chat keeps the original message and everything after it.
         bodyEl.innerHTML = originalHTML;
         try {
-          await _forkSessionAt(msgIndex);
+          await _forkSessionAt(msgIndex, userMsgElement.dataset.dbId || '');
         } catch (err) {
           console.error('Fork failed:', err);
           if (uiModule) uiModule.showError('Fork failed: ' + err.message);
@@ -6963,11 +6963,15 @@ import { invalidateSettings } from './appConfig.js';
       }
 
       const keepCount = msgIndex;
+      // Cut at the message's database id: msgIndex counts only the messages
+      // loaded in the page, so it is too small when older history has not
+      // been scrolled in yet.
+      const editBeforeId = userMsgElement.dataset.dbId || '';
       try {
         await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keep_count: keepCount })
+          body: JSON.stringify(editBeforeId ? { before_msg_id: editBeforeId } : { keep_count: keepCount })
         });
 
         // Remove DOM elements from msgIndex onward
@@ -7028,13 +7032,16 @@ import { invalidateSettings } from './appConfig.js';
   // Copy the first `keepCount` messages of the current chat into a new chat
   // and switch to it. Returns the new session id; throws on failure so callers
   // that replay an action in the fork can stop before sending anything.
-  async function _forkSessionAt(keepCount) {
+  // Fork by message id when the element has one (before it, or through it);
+  // keepCount is only a fallback, since it counts loaded messages only.
+  async function _forkSessionAt(keepCount, beforeMsgId = '', throughMsgId = '') {
     const sessionId = sessionModule.getCurrentSessionId();
     if (!sessionId) throw new Error('No active chat');
     const res = await fetch(`${API_BASE}/api/session/${sessionId}/fork`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keep_count: keepCount }),
+      body: JSON.stringify(beforeMsgId ? { before_msg_id: beforeMsgId, keep_count: keepCount }
+        : throughMsgId ? { through_msg_id: throughMsgId, keep_count: keepCount } : { keep_count: keepCount }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
@@ -7108,7 +7115,7 @@ import { invalidateSettings } from './appConfig.js';
         if (choice === 'fork') {
           // Branch just before this user turn and send it again there; this
           // chat keeps every message.
-          await _forkSessionAt(msgIndex);
+          await _forkSessionAt(msgIndex, userMsgElement.dataset.dbId || '');
           _pendingRegenAttachments = _ids;
           const forkInput = uiModule.el('message');
           forkInput.value = text;
@@ -7235,7 +7242,7 @@ import { invalidateSettings } from './appConfig.js';
       // chat gets a fresh reply to the same message; this chat keeps every
       // message. No variants or hidden bubble: the fork starts without them.
       try {
-        await _forkSessionAt(userIndex);
+        await _forkSessionAt(userIndex, (userMsgEl && userMsgEl.dataset.dbId) || '');
       } catch (err) {
         _pendingRegenAttachments = null;
         console.error('Fork failed:', err);
@@ -7260,12 +7267,15 @@ import { invalidateSettings } from './appConfig.js';
     }
 
     const keepCount = userIndex;
+    // Same as resend: cut at the user message's database id, because
+    // userIndex counts only the messages loaded in the page.
+    const regenBeforeId = (userMsgEl && userMsgEl.dataset.dbId) || '';
 
     try {
       await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keep_count: keepCount })
+        body: JSON.stringify(regenBeforeId ? { before_msg_id: regenBeforeId } : { keep_count: keepCount })
       });
 
       // Keep the original user bubble, but remove every rendered trace after
@@ -7440,7 +7450,7 @@ import { invalidateSettings } from './appConfig.js';
     if (!sessionId) return;
 
     try {
-      await _forkSessionAt(aiIndex + 1);
+      await _forkSessionAt(aiIndex + 1, '', aiMsgElement.dataset.dbId || '');
     } catch (err) {
       console.error('Fork failed:', err);
       if (uiModule) uiModule.showError('Fork failed: ' + err.message);
