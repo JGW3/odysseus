@@ -59,6 +59,9 @@ import { invalidateSettings } from './appConfig.js';
   let _sendInFlight = false;   // covers the window from click → streaming start
   let _displayOverride = null; // Override visible user bubble text (hides injected prompts)
   let _hideUserBubble = false; // Skip user bubble entirely (e.g. continue after stop)
+  // The user bubble a regenerate keeps on screen. Its resubmitted message is
+  // a new DB row, so the saved id is attached here.
+  let _regenKeptUserBubble = null;
   let _contextHeaderSeq = 0;
   let _contextHeaderData = null;
   let _contextHeaderBound = false;
@@ -4649,6 +4652,15 @@ import { invalidateSettings } from './appConfig.js';
                   refreshChatContextHeader('metrics');
                 }
 
+              } else if (json.type === 'user_message_saved') {
+                // The user bubble gets its DB id too, so regenerating or
+                // editing it later cuts the chat by id, not page position.
+                if (!_isBg && json.id) {
+                  if (_userMsgEl) _userMsgEl.dataset.dbId = json.id;
+                  else if (_regenKeptUserBubble) _regenKeptUserBubble.dataset.dbId = json.id;
+                  _regenKeptUserBubble = null;
+                }
+
               } else if (json.type === 'message_saved') {
                 // Wire the persisted DB id onto the just-streamed bubble so it
                 // can be edited/deleted immediately, without reloading the chat.
@@ -6968,11 +6980,12 @@ import { invalidateSettings } from './appConfig.js';
       // been scrolled in yet.
       const editBeforeId = userMsgElement.dataset.dbId || '';
       try {
-        await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
+        const editTruncate = await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(editBeforeId ? { before_msg_id: editBeforeId } : { keep_count: keepCount })
         });
+        if (!editTruncate.ok) throw new Error('Server error ' + editTruncate.status);
 
         // Remove DOM elements from msgIndex onward
         for (let i = allMsgs.length - 1; i >= msgIndex; i--) {
@@ -7272,11 +7285,13 @@ import { invalidateSettings } from './appConfig.js';
     const regenBeforeId = (userMsgEl && userMsgEl.dataset.dbId) || '';
 
     try {
-      await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
+      const regenTruncate = await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(regenBeforeId ? { before_msg_id: regenBeforeId } : { keep_count: keepCount })
       });
+      // A refused cut (e.g. a stale id) must not stack a second reply.
+      if (!regenTruncate.ok) throw new Error('Server error ' + regenTruncate.status);
 
       // Keep the original user bubble, but remove every rendered trace after
       // it, including agent-thread tool history between the user and AI bubble.
@@ -7293,6 +7308,7 @@ import { invalidateSettings } from './appConfig.js';
       _pendingVariantLabel = 'regen';
 
       _hideUserBubble = true;
+      _regenKeptUserBubble = userMsgEl;
       const messageInput = uiModule.el('message');
       messageInput.value = userText;
       const submitBtn = document.querySelector('.send-btn');

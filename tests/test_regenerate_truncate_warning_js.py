@@ -91,7 +91,9 @@ _HARNESS_PREAMBLE = """
       globalThis.fetch = async (url, opts) => {
         fetchCalls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : null });
         const data = url.includes('/fork') ? { id: 'forked-session', name: 'Forked chat' } : {};
-        return { ok: true, json: async () => data, text: async () => '', headers: { get() { return null; } } };
+        // A test can make the server refuse the cut (e.g. a stale message id).
+        const ok = !(url.includes('/truncate') && globalThis.__refuseTruncate);
+        return { ok, status: ok ? 200 : 404, json: async () => data, text: async () => '', headers: { get() { return null; } } };
       };
 
       class Element {
@@ -167,7 +169,7 @@ _HARNESS_PREAMBLE = """
 """
 
 
-def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_resolution, then_js: str = "", db_ids: bool = False) -> str:
+def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_resolution, then_js: str = "", db_ids: bool = False, refuse_truncate: bool = False) -> str:
     # Globals are stubbed above as plain synchronous statements *before* the
     # dynamic import()s below run — unlike a static `import` declaration,
     # dynamic import() executes in program order, so chat.js's transitive
@@ -192,6 +194,7 @@ def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_
       uiMod.showError = () => {{}};
       uiMod.showToast = () => {{}};
 
+      globalThis.__refuseTruncate = {json.dumps(refuse_truncate)};
       const msgs = buildMsgEls({json.dumps(roles)});
       // Persisted messages carry their database id; the page may have loaded
       // only the newest of them, so ids (not positions) identify a message.
@@ -457,4 +460,26 @@ def test_fork_conversation_forks_through_the_reply_by_id():
     script = _scenario_script("chat.forkFrom(target)", roles, 1, True, db_ids=True)
     result = _run_node(script)
     assert result["forkBody"]["through_msg_id"] == "db-41"
+
+
+# A refused cut (the server can't find the message id, e.g. one a previous
+# regenerate already deleted) must stop the action. Sending anyway stacked a
+# second reply under the same message.
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_regenerate_stops_when_the_server_refuses_the_cut():
+    roles = ["user", "ai"]
+    script = _scenario_script("chat.regenerateFrom(target)", roles, 1, True, db_ids=True, refuse_truncate=True)
+    result = _run_node(script)
+    assert result["truncateCalled"] is True
+    assert result["sendClicks"] == []
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_edit_stops_when_the_server_refuses_the_cut():
+    roles = ["user", "ai"]
+    script = _scenario_script("chat.editUserMessage(target)", roles, 0, True, _EDIT_AND_SEND, db_ids=True, refuse_truncate=True)
+    result = _run_node(script)
+    assert result["truncateCalled"] is True
+    assert result["sendClicks"] == []
 
