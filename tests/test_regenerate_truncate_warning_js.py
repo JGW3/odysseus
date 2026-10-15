@@ -1,6 +1,6 @@
 """Executable regression for the "regenerate" data-loss warning.
 
-`regenerateFrom` (the per-message ↻ footer button), `resendUserMessage`
+`regenerateFrom` (the per-message regenerate footer button), `resendUserMessage`
 (footer Resend and the vision editor's "Regenerate message" button) and
 `editUserMessage` (sending an edited user message) all permanently delete
 every message after the point clicked via POST /api/session/{id}/truncate —
@@ -227,7 +227,7 @@ def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_
 
 
 # ---------------------------------------------------------------------------
-# regenerateFrom (main chat footer "↻ Regenerate from here")
+# regenerateFrom (main chat footer "Regenerate from here" button)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
@@ -326,7 +326,7 @@ def test_resend_append_only_never_truncates_or_prompts():
 
 
 # ---------------------------------------------------------------------------
-# editUserMessage (✎ edit, then Send)
+# editUserMessage (the pencil edit button, then Send)
 # ---------------------------------------------------------------------------
 # The edit Send handler is wired up inside editUserMessage, so these open the
 # editor, type into it, and click the editor's own Send button.
